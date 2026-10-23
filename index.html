@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hand Puppet</title>
+  <style>
+    body {
+      margin: 0;
+      background: #111;
+      color: #eee;
+      font-family: system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      padding: 16px;
+    }
+    #stage { position: relative; }
+    canvas { border-radius: 8px; background: #000; max-width: 100%; }
+    #status { font-size: 14px; opacity: 0.8; min-height: 18px; }
+    #source { font-size: 12px; opacity: 0.5; }
+    #source a { color: inherit; }
+  </style>
+</head>
+<body>
+  <h1>Hand Puppet</h1>
+  <div id="status">Loading…</div>
+  <div id="stage">
+    <canvas id="output" width="640" height="480"></canvas>
+  </div>
+  <div id="source"></div>
+
+  <video id="video" autoplay playsinline style="display:none"></video>
+
+  <!--
+    MediaPipe Hands can come from two places:
+
+      * libs/mediapipe/   (local copy, works offline)  — used when the page is
+        served over http:// or https://, e.g. by start.command.
+      * jsdelivr CDN      (needs internet)             — used when the page is
+        opened by double-clicking index.html (a file:// URL).
+
+    Why the split: the tracker fetches its .wasm and model files with fetch(),
+    and browsers refuse fetch() on file:// URLs. <script> tags are allowed on
+    file://, which is why the CDN version still runs when double-clicked.
+  -->
+  <script>
+    const IS_FILE_URL = location.protocol === 'file:';
+    const MP_BASE = IS_FILE_URL
+      ? 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240'
+      : 'libs/mediapipe';
+    const DRAW_SRC = IS_FILE_URL
+      ? 'https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3.1675466124/drawing_utils.js'
+      : 'libs/mediapipe/drawing_utils.js';
+
+    // Load the two scripts, in order, from whichever source was chosen.
+    document.write(`<script src="${MP_BASE}/hands.js"><\/script>`);
+    document.write(`<script src="${DRAW_SRC}"><\/script>`);
+  </script>
+
+  <script>
+    const video  = document.getElementById('video');
+    const canvas = document.getElementById('output');
+    const ctx    = canvas.getContext('2d');
+    const status = document.getElementById('status');
+    const source = document.getElementById('source');
+
+    source.textContent = IS_FILE_URL
+      ? 'Tracker loaded from the internet (page opened as a file). For offline use, run start.command.'
+      : 'Tracker loaded from local files (offline).';
+
+    // If the scripts did not load (e.g. opened as a file with no internet),
+    // say so instead of failing silently.
+    if (typeof Hands === 'undefined') {
+      status.textContent = IS_FILE_URL
+        ? 'Could not load the hand tracker. Opening index.html directly needs an internet connection; to run offline, double-click start.command instead.'
+        : 'Could not load the hand tracker from libs/mediapipe. Run download-mediapipe.sh to fetch the files.';
+      throw new Error('MediaPipe Hands failed to load');
+    }
+
+    // --- 1. Configure the hand tracker ---------------------------------
+    const hands = new Hands({
+      locateFile: (file) => `${MP_BASE}/${file}`
+    });
+    hands.setOptions({
+      maxNumHands: 2,            // track both hands
+      modelComplexity: 1,
+      minDetectionConfidence: 0.6,
+      minTrackingConfidence: 0.6
+    });
+    hands.onResults(onResults);
+
+    // The five fingertip landmark numbers: thumb, index, middle, ring, pinky.
+    const TIP_IDS = [4, 8, 12, 16, 20];
+
+    // Collect every fingertip from every detected hand into one flat list of
+    // {x, y} points in CANVAS pixels (landmarks come in as 0..1 fractions).
+    function collectFingertips(multiHandLandmarks) {
+      const tips = [];
+      for (const landmarks of multiHandLandmarks) {
+        for (const id of TIP_IDS) {
+          const lm = landmarks[id];
+          tips.push({ x: lm.x * canvas.width, y: lm.y * canvas.height });
+        }
+      }
+      return tips;
+    }
+
+    // Draw "strings" by connecting the fingertips in order with one line.
+    function drawStrings(tips) {
+      if (tips.length < 2) return;
+      ctx.beginPath();
+      ctx.moveTo(tips[0].x, tips[0].y);
+      for (let i = 1; i < tips.length; i++) {
+        ctx.lineTo(tips[i].x, tips[i].y);
+      }
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#00e5ff';
+      ctx.stroke();
+
+      // a dot on each fingertip so the anchor points are visible
+      for (const p of tips) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+      }
+    }
+
+    // --- 2. The model calls this every time it finishes a frame --------
+    function onResults(results) {
+      // Draw everything inside a mirror transform so the picture and the
+      // landmarks both flip together and stay aligned.
+      ctx.save();
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+
+      // background: the camera frame
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        // faint skeleton so you can still see the tracking underneath
+        for (const landmarks of results.multiHandLandmarks) {
+          drawConnectors(ctx, landmarks, Hands.HAND_CONNECTIONS, {
+            color: 'rgba(0,255,136,0.35)', lineWidth: 2
+          });
+        }
+
+        // the strings between fingertips
+        const tips = collectFingertips(results.multiHandLandmarks);
+        drawStrings(tips);
+
+        status.textContent =
+          `Hands: ${results.multiHandLandmarks.length} · fingertips: ${tips.length}`;
+      } else {
+        status.textContent = 'No hands in view';
+      }
+
+      ctx.restore();
+    }
+
+    // --- 3. Start the camera and feed frames to the model --------------
+    async function start() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 480 }, audio: false
+        });
+        video.srcObject = stream;
+        await video.play();
+        status.textContent = 'Camera running. Show a hand.';
+        sendLoop();
+      } catch (err) {
+        status.textContent = 'Camera error: ' + err.message;
+        console.error(err);
+      }
+    }
+
+    // Hand the current video frame to the model, then queue the next.
+    async function sendLoop() {
+      try {
+        await hands.send({ image: video });
+      } catch (err) {
+        status.textContent = 'Tracker error: ' + err.message;
+        console.error(err);
+        return;                  // stop the loop; the error is shown above
+      }
+      requestAnimationFrame(sendLoop);
+    }
+
+    start();
+  </script>
+</body>
+</html>

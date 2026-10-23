@@ -1,0 +1,14 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Downloaded at first run by hand_control.py (~8 MB)
+hand_landmarker.task
+
+# Third-party MediaPipe JS/WASM for the browser prototype (~24 MB);
+# regenerate with: bash download-mediapipe.sh
+libs/mediapipe/
+
+# macOS
+.DS_Store
