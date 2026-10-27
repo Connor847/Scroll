@@ -31,8 +31,16 @@ python3 -m venv .venv
 .venv/bin/python hand_control.py
 ```
 
-Add `--dry-run` to print the actions in the terminal instead of sending them
-to macOS. Useful for checking recognition before letting it drive.
+A small status overlay appears at the top-left of the screen, above all other
+windows, showing the current mode: IDLE, SCROLL, ARMED, ZOOM IN, ZOOM OUT.
+Click it to pause or resume. Press Ctrl+C in the terminal to quit.
+
+Options:
+
+- `--preview` opens the full camera window instead, with the tracked hand
+  and the live measurements drawn on it. Use this for tuning.
+- `--dry-run` prints the actions in the terminal instead of sending them to
+  macOS, for checking recognition before letting it drive.
 
 On first run:
 
@@ -44,8 +52,8 @@ On first run:
 3. The first time an event is sent, macOS asks for **Accessibility** access.
    Same procedure: allow, quit and reopen the terminal app, run again.
 
-A preview window shows the camera, the tracked hand, the current state, and
-the numbers the decisions are based on.
+In `--preview` mode the window shows the camera, the tracked hand, the
+current state, and the numbers the decisions are based on.
 
 Keys in the preview window:
 
@@ -58,8 +66,8 @@ Keys in the preview window:
 
 ## Gestures
 
-Only the chosen hand is used (default: right). The other hand is ignored and
-drawn in grey.
+Only the chosen hand is used (default: right, set by `HAND` at the top of the
+file). The other hand is ignored; in preview mode it is drawn in grey.
 
 ### Scroll
 
@@ -72,31 +80,38 @@ drawn in grey.
 
 ### Zoom
 
-1. **Arm:** peace sign (index and middle in a V, thumb tucked, ring and pinky
-   curled). This opens a one-second window.
+1. **Arm:** pointer (index finger up, other fingers curled, thumb anywhere).
+   This opens a one-second window.
 2. **Choose a direction** within the window:
-   - **pinch** thumb, index and middle tips together → zoom **in**
-   - **spread** thumb, index and middle wide apart → zoom **out**
+   - **pinch** thumb, index and middle tips together (ring and pinky curled) → zoom **in**
+   - **open hand** all fingers extended → zoom **out**
 3. **Zoom in:** spread the fingers; each step of spread sends one Cmd+=.
-   Ends when the fingers are approximately fully extended.
-   **Zoom out:** close the fingers; each step sends one Cmd+-. Ends when they
-   are approximately fully pinched.
-   Opening the hand also ends either.
-4. Back to idle. The next zoom needs a new peace sign.
+   Ends when the fingers are approximately fully extended, or on a peace
+   sign or open hand.
+   **Zoom out:** close the whole hand; steps are spread over the closing
+   motion. Ends when the hand is nearly a fist, when it reopens (a peace sign
+   after closing counts as reopening), or after 1.5 s without progress.
+   The peace sign is not read as a pose during zoom-out, since a closing hand
+   passes through that shape; it ends the zoom by reopening the fingers.
+4. Back to idle. The next zoom needs a new pointer.
 
-Each zoom is one-directional, set by the arming pose, and ratcheted: closing
+Each zoom is one-directional, set by the choosing pose, and ratcheted: closing
 slightly during a zoom-in does nothing. Zoom steps are keyboard shortcuts, so
 apps zoom in their own increments (roughly 10% per step in most browsers).
+
+### Disarm
+
+A **peace sign** (index and middle in a V, thumb tucked, ring and pinky
+curled) returns to idle from scrolling, armed, or zoom-in. An open hand does
+the same. Zoom-out ends only by closing the hand or taking it out of view.
 
 ### State diagram
 
 ```
-IDLE ──two fingers together──▶ SCROLL ──peace──▶ ARMED
-  │                               │
-  └────────peace──────────────────┘
-ARMED ──pinch──▶ ZOOM_IN  ──fully extended / open hand──▶ IDLE
-ARMED ──spread─▶ ZOOM_OUT ──fully pinched  / open hand──▶ IDLE
-ARMED ──1 s with neither──▶ IDLE
+IDLE ──two fingers together──▶ SCROLL ──peace / open hand──▶ IDLE
+IDLE ──pointer──▶ ARMED ──pinch─────▶ ZOOM_IN  ──fully extended / peace / open──▶ IDLE
+                  ARMED ──open hand─▶ ZOOM_OUT ──closed to a fist──▶ IDLE
+                  ARMED ──peace, or 1 s with neither──▶ IDLE
 any state ──hand lost──▶ IDLE
 ```
 
@@ -127,13 +142,19 @@ threshold can be set by holding the pose and reading the number.
 |---|---|---|
 | `HAND` | `"Right"` | which hand to use; `"Left"` or `"Any"` |
 | `SWAP_HANDEDNESS` | `True` | flip if the preview labels your hands backwards |
-| `SCROLL_GAIN` | 700 | scroll pixels per palm-length of finger movement |
+| `SCROLL_GAIN` | 550 | scroll pixels per palm-length of finger movement |
 | `SCROLL_SMOOTHING` | 0.5 | 0 = raw, higher = smoother but laggier |
+| `SCROLL_PAUSE_APART` / `SCROLL_PAUSE_SEP_RATE` | 0.45 / 0.06 | scrolling pauses at once when the two fingers separate past this gap, or this fast |
 | `SCROLL_DEADZONE` | 0.008 | per-frame movement ignored as jitter |
 | `SCROLL_INVERT` | `False` | flip scroll direction |
-| `ZOOM_ARM_TIMEOUT` | 1.0 | seconds after the peace sign to pinch or spread |
-| `ZOOM_STEP` | 0.15 | spread change per zoom step (lower = more steps) |
-| `ZOOM_DONE_SPREAD` / `ZOOM_DONE_PINCH` | 1.30 / 0.35 | spread values that end zoom in / out |
+| `ZOOM_ARM_TIMEOUT` | 1.0 | seconds after the pointer to pinch or spread |
+| `ZOOM_STEP` | 0.15 | zoom-in: spread change per step (lower = more steps) |
+| `ZOOM_OUT_STEPS` | 10 | zoom-out: steps over one full hand close |
+| `ZOOM_OUT_CURVE` | 0.5 | zoom-out: how the steps are spread; lower = more of them early in the close, 1.0 = even over the raw measure (which bunches them late) |
+| `ZOOM_OUT_DEADZONE` | 0.15 | zoom-out: closure ignored before steps start |
+| `ZOOM_OUT_REOPEN` / `ZOOM_OUT_TIMEOUT` | 0.25 / 1.5 | zoom-out ends on reopening this far, or after this many idle seconds |
+| `ZOOM_DONE_SPREAD` | 1.30 | spread at which zoom-in ends (fully extended) |
+| `ZOOM_DONE_OPENNESS` | 1.05 | hand openness at which zoom-out ends (nearly closed) |
 | `HOLD_FRAMES` / `ARM_HOLD_FRAMES` | 3 / 2 | frames a pose must hold to change state |
 | `PINCH_RADIUS`, `TOGETHER_MAX`, `APART_MIN`, `THUMB_OUT_MIN`, `THUMB_TUCKED_MAX`, `SCROLL_THUMB_CLEAR` | see file | pose recognition thresholds |
 
@@ -147,7 +168,8 @@ what separates a peace sign from the spread pose.
 | `Could not open the camera` on the first run | The permission prompt just appeared. Allow it, Cmd+Q the terminal app, reopen, run again. |
 | Still can't open the camera | The entry in System Settings → Privacy & Security → Camera must be for the app you're typing in (Terminal, iTerm2, Warp, VS Code...). `tccutil reset Camera <bundle-id>` forces a fresh prompt. |
 | Recognizes poses but nothing happens in apps | Accessibility permission. System Settings → Privacy & Security → Accessibility, enable the terminal app, restart it. |
-| It tracks the wrong hand | Press S to swap the labels (then set `SWAP_HANDEDNESS` to match), or H to change which hand is used. |
+| It tracks the wrong hand | In `--preview`, press S to swap the labels (then set `SWAP_HANDEDNESS` to match), or H to change which hand is used. |
+| No overlay appears | Run with `--preview` to confirm tracking works; if it does, the terminal output shows the overlay error. |
 | Page scrolls the wrong way | `SCROLL_INVERT = True`. |
 | Zoom-in never ends on its own | Your fully-extended `spread` reading is below `ZOOM_DONE_SPREAD`; lower it. Opening the hand always ends it. |
 | Arm window keeps expiring | Raise `ZOOM_ARM_TIMEOUT`, or loosen `PINCH_RADIUS` / `THUMB_OUT_MIN`. The `last:` line in the preview says why a state ended. |

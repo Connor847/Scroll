@@ -2,6 +2,8 @@
 # Apple Silicon Mac wheel. (Intel Macs: use mediapipe==0.10.21 with Python 3.9-3.12.)
 mediapipe==0.10.32
 opencv-python>=4.9
-# macOS event posting (scroll wheel + Cmd key events) and Accessibility check
+# macOS event posting (scroll wheel + Cmd key events), Accessibility check,
+# and the status overlay window (AppKit)
 pyobjc-framework-Quartz>=10
 pyobjc-framework-ApplicationServices>=10
+pyobjc-framework-Cocoa>=10
